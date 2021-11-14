@@ -2,30 +2,31 @@
 
 pragma solidity ^0.8.0;
 
-import './interfaces/IMarket.sol';
+import './interfaces/IOracleMarkets.sol';
 import './interfaces/IERC20.sol';
 import './ERC1155.sol';
 
-contract OracleMarkets is ERC1155, IMarket {
+contract OracleMarkets is ERC1155, IOracleMarkets {
     /*
         marketIdentifier = keccack256(abi.encode(creator, eventIdentifier, address(this)))
     */
-    mapping(bytes32 => StateDetails) stateDetails;
-    mapping(bytes32 => Staking) staking;
-    mapping(bytes32 => MarketDetails) marketDetails;
-    mapping(bytes32 => Reserves) reserves;
-    mapping(bytes32 => StakingReserves) stakingReserves;
+    mapping(bytes32 => StateDetails) public stateDetails;
+    mapping(bytes32 => Staking) public staking;
+    mapping(bytes32 => MarketDetails) public marketDetails;
+    mapping(bytes32 => Reserves) public reserves;
+    mapping(bytes32 => StakingReserves) public stakingReserves;
     mapping(bytes32 => mapping(bytes32 => uint256)) stakes;
     mapping(bytes32 => address) creators;
     mapping(bytes32 => bytes) eventIdentfiier;
 
-    address collateralToken;
-    MarketConfig marketConfig;
+    address public collateralToken;
+    MarketConfig public marketConfig;
 
-    address delegate;
+    address public delegate;
 
-    constructor(){
-        // setup oracle?
+    constructor(address _delegate){
+        // setup oracle
+        delegate = _delegate;
     }
 
     function isMarketFunded(bytes32 marketIdentifier) internal view returns (bool) {
@@ -86,42 +87,42 @@ contract OracleMarkets is ERC1155, IMarket {
         marketIdentifier = keccak256(abi.encode(_creator, _eventIdentifier, address(this)));
     }
 
-    function getStateDetails(bytes32 marketIdentifier) external view returns (
-        uint[9] memory detailsArr
-    ) {
-        StateDetails memory _details = stateDetails[marketIdentifier];
-        detailsArr[0] = _details.expireAtBlock;
-        detailsArr[1] = _details.donBufferEndsAtBlock;
-        detailsArr[2] = _details.resolutionEndsAtBlock;
-        detailsArr[3] = _details.donBufferBlocks;
-        detailsArr[4] = _details.resolutionBufferBlocks;
-        detailsArr[5] = _details.donEscalationCount;
-        detailsArr[6] = _details.donEscalationLimit;
-        detailsArr[7] = _details.outcome;
-        detailsArr[8] = _details.stage;
-    }
+    // function getStateDetails(bytes32 marketIdentifier) external view returns (
+    //     uint[9] memory detailsArr
+    // ) {
+    //     StateDetails memory _details = stateDetails[marketIdentifier];
+    //     detailsArr[0] = _details.expireAtBlock;
+    //     detailsArr[1] = _details.donBufferEndsAtBlock;
+    //     detailsArr[2] = _details.resolutionEndsAtBlock;
+    //     detailsArr[3] = _details.donBufferBlocks;
+    //     detailsArr[4] = _details.resolutionBufferBlocks;
+    //     detailsArr[5] = _details.donEscalationCount;
+    //     detailsArr[6] = _details.donEscalationLimit;
+    //     detailsArr[7] = _details.outcome;
+    //     detailsArr[8] = _details.stage;
+    // }
 
-    // get staking info
-    function getStaking(bytes32 marketIdentifier) external view returns(uint,address,address,uint8){
-        Staking memory _staking = staking[marketIdentifier];
-        return (
-            _staking.lastAmountStaked,
-            _staking.staker0,
-            _staking.staker1,
-            _staking.lastOutcomeStaked
-        );
-    }
+    // // get staking info
+    // function getStaking(bytes32 marketIdentifier) external view returns(uint,address,address,uint8){
+    //     Staking memory _staking = staking[marketIdentifier];
+    //     return (
+    //         _staking.lastAmountStaked,
+    //         _staking.staker0,
+    //         _staking.staker1,
+    //         _staking.lastOutcomeStaked
+    //     );
+    // }
 
-    function getMarketDetails(bytes32 marketIdentifier) external view returns(address, uint32, uint32) {
-        MarketDetails memory _marketDetails = marketDetails[marketIdentifier];
-        return (
-            _marketDetails.tokenC,
-            _marketDetails.feeNumerator,
-            _marketDetails.feeDenominator
-        );
-    }
+    // function getMarketDetails(bytes32 marketIdentifier) external view returns(address, uint32, uint32) {
+    //     MarketDetails memory _marketDetails = marketDetails[marketIdentifier];
+    //     return (
+    //         _marketDetails.tokenC,
+    //         _marketDetails.feeNumerator,
+    //         _marketDetails.feeDenominator
+    //     );
+    // }
 
-    function createMarketAndFund(address _creator, bytes32 _eventIdentifier) external {
+    function createAndFundMarket(address _creator, bytes32 _eventIdentifier) external {
         bytes32 marketIdentifier = getMarketIdentifier(_creator, _eventIdentifier);
 
         require(creators[marketIdentifier] == address(0), 'Market exists');
@@ -169,6 +170,9 @@ contract OracleMarkets is ERC1155, IMarket {
         creators[marketIdentifier] = _creator;
 
         require(amount > 0, 'ZERO');
+
+        // oracle is active
+        require(marketConfig.isActive, 'Oracle inactive');
     }
 
     function buy(uint amount0, uint amount1, address to, bytes32 marketIdentifier) external {
@@ -400,5 +404,34 @@ contract OracleMarkets is ERC1155, IMarket {
         IERC20(marketDetails[marketIdentifier].tokenC).transfer(msg.sender, fee);
 
         emit OutcomeSet(address(this));
+    }
+
+    function updateMarketConfig(
+        bool _isActive, 
+        uint8 _feeNumerator, 
+        uint8 _feeDenominator,
+        uint16 _donEscalationLimit, 
+        uint32 _expireBufferBlocks, 
+        uint32 _donBufferBlocks, 
+        uint32 _resolutionBufferBlocks
+    ) external {
+        MarketConfig memory _marketConfig;
+        marketConfig.isActive = _isActive;
+        marketConfig.feeNumerator = _feeNumerator;
+        marketConfig.feeDenominator = _feeDenominator;
+        marketConfig.donEscalationLimit = _donEscalationLimit;
+        marketConfig.expireBufferBlocks = _expireBufferBlocks;
+        marketConfig.donBufferBlocks = _donBufferBlocks;
+        marketConfig.resolutionBufferBlocks = _resolutionBufferBlocks;
+        marketConfig = _marketConfig;
+    }
+
+    function updateCollateralToken(address token) external {
+        collateralToken = token;
+    }
+
+    function updateDelegate(address _delegate) external {
+        require(msg.sender == delegate);
+        delegate = _delegate;
     }
 }

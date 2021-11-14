@@ -3,63 +3,54 @@
 pragma solidity ^0.8.0;
 
 import './libraries/TransferHelper.sol';
-import './interfaces/IMarket.sol';
 import './libraries/Math.sol';
-import './interfaces/IMarketFactory.sol';
+import './OracleMarkets.sol';
 
 
 contract MarketRouter {
     address public factory;
 
-    bytes32 constant public MARKET_INIT_CODE_HASH = 0xafd9d7476ae82bdc5f129b881537d33f4e31ac28cb51cabf0a9b8c07bdd19a34;
-
     constructor(address _factory) {
         factory = _factory;
     }
 
-
-    /// @notice Contract address of a prediction market
-    function getMarketAddress(address creator, address oracle, string memory identifier) public view returns (address marketAddress) {
-        marketAddress = address(uint160(uint256(keccak256(abi.encodePacked(
-                hex'ff',
-                factory,
-                keccak256(abi.encode(creator, oracle, identifier)),
-                MARKET_INIT_CODE_HASH
-            )))));
+    function getMarketIdentifier(address creator, bytes32 eventIdentifier, address oracle) public pure returns (bytes32 marketIdentifier){
+        marketIdentifier = keccak256(abi.encode(creator, eventIdentifier, oracle));
     }
 
     /// @notice Create, fund, and place bet on a market
-    function createAndPlaceBetOnMarket(address _creator, address _oracle, string memory _identifier, uint _fundingAmount, uint _amountIn, uint _for) external {
-        require(_for < 2 && _fundingAmount > 0);
-        address marketAddress = IMarketFactory(factory).createMarket(_creator, _oracle, _identifier);
+    function createFundBetOnMarket(bytes32 eventIdentifier, address oracle, uint fundingAmount, uint amountIn, uint _for) external {
+        require(_for < 2 && fundingAmount > 0);
 
-        (address tokenC,,) = IMarket(marketAddress).getTokenAddresses();
+        address tokenC = OracleMarkets(oracle).collateralToken();
 
-        // fund
-        TransferHelper.safeTransferFrom(tokenC, msg.sender, marketAddress, _fundingAmount);
-        IMarket(marketAddress).fund();
+        // create & fund
+        TransferHelper.safeTransfer(tokenC, oracle, fundingAmount);
+        OracleMarkets(oracle).createAndFundMarket(msg.sender, eventIdentifier);
 
-        TransferHelper.safeTransferFrom(tokenC, msg.sender, marketAddress, _amountIn);
-        if (_for == 0) IMarket(marketAddress).buy(_amountIn, 0, msg.sender);
-        if (_for == 1) IMarket(marketAddress).buy(0, _amountIn, msg.sender);
+        // place bet
+        bytes32 marketIdentifier = getMarketIdentifier(msg.sender, eventIdentifier, oracle);
+        TransferHelper.safeTransfer(tokenC, oracle, amountIn);
+        if (_for == 0) OracleMarkets(oracle).buy(amountIn, 0, msg.sender, marketIdentifier);
+        if (_for == 1) OracleMarkets(oracle).buy(0, amountIn, msg.sender, marketIdentifier);
     }
 
     /// @notice Buy exact amountOfToken0 & amountOfToken1 with collteral tokens <= amountInCMax
-    function buyExactTokensForMaxCTokens(uint amountOutToken0, uint amountOutToken1, uint amountInCMax, address market) external {
-        (uint reserve0, uint reserve1) = IMarket(market).getOutcomeReserves();
+    function buyExactTokensForMaxCTokens(uint amountOutToken0, uint amountOutToken1, uint amountInCMax, address oracle, bytes32 marketIdentifier) external {
+        (uint reserve0, uint reserve1) = OracleMarkets(oracle).reserves(marketIdentifier);
         uint amountIn = Math.getAmountCToBuyTokens(amountOutToken0, amountOutToken1, reserve0, reserve1);
         require(amountInCMax >= amountIn, "TRADE: INVALID");
-        (address tokenC,,) = IMarket(market).getTokenAddresses();
-        TransferHelper.safeTransferFrom(tokenC, msg.sender, market, amountIn);
-        IMarket(market).buy(amountOutToken0, amountOutToken1, msg.sender);
+        (address tokenC,,) = OracleMarkets(oracle).marketDetails(marketIdentifier);
+        TransferHelper.safeTransferFrom(tokenC, msg.sender, oracle, amountIn);
+        OracleMarkets(oracle).buy(amountOutToken0, amountOutToken1, msg.sender, marketIdentifier);
     }
 
     /// @notice Buy minimum amountOfToken0 & amountOfToken1 with collteral tokens == amountInC. 
     /// fixedTokenIndex - index to token of which amount does not change in reaction to prices 
-    function buyMinTokensForExactCTokens(uint amountOutToken0Min, uint amountOutToken1Min, uint amountInC, uint fixedTokenIndex, address market) external {
+    function buyMinTokensForExactCTokens(uint amountOutToken0Min, uint amountOutToken1Min, uint amountInC, uint fixedTokenIndex, address oracle, bytes32 marketIdentifier) external {
         require(fixedTokenIndex < 2);
 
-        (uint reserve0, uint reserve1) = IMarket(market).getOutcomeReserves();
+        (uint reserve0, uint reserve1) = OracleMarkets(oracle).reserves(marketIdentifier);
 
         uint amountOutToken0 = amountOutToken0Min;
         uint amountOutToken1 = amountOutToken1Min;
@@ -70,30 +61,29 @@ contract MarketRouter {
         }
         require(amountOutToken0 >= amountOutToken0Min && amountOutToken1 >= amountOutToken1Min);
 
-        (address tokenC,,) = IMarket(market).getTokenAddresses();
-        TransferHelper.safeTransferFrom(tokenC, msg.sender, market, amountInC);
-        IMarket(market).buy(amountOutToken0, amountOutToken1, msg.sender);
+        (address tokenC,,) = OracleMarkets(oracle).marketDetails(marketIdentifier);
+        TransferHelper.safeTransferFrom(tokenC, msg.sender, oracle, amountInC);
+        OracleMarkets(oracle).buy(amountOutToken0, amountOutToken1, msg.sender, marketIdentifier);
     }
 
     /// @notice Sell exact amountInToken0 & amountInToken1 for collateral tokens >= amountOutTokenCMin
-    function sellExactTokensForMinCTokens(uint amountInToken0, uint amountInToken1, uint amountOutTokenCMin, address market) external {
-        (uint reserve0, uint reserve1) = IMarket(market).getOutcomeReserves();
+    function sellExactTokensForMinCTokens(uint amountInToken0, uint amountInToken1, uint amountOutTokenCMin, address oracle, bytes32 marketIdentifier) external {
+        (uint reserve0, uint reserve1) = OracleMarkets(oracle).reserves(marketIdentifier);
         uint amountOutTokenC = Math.getAmountCBySellTokens(amountInToken0, amountInToken1, reserve0, reserve1);
         require(amountOutTokenC >= amountOutTokenCMin, "TRADE: INVALID");
 
-
-        (,address token0, address token1) = IMarket(market).getTokenAddresses();
-        TransferHelper.safeTransferFrom(token0, msg.sender, market, amountInToken0);
-        TransferHelper.safeTransferFrom(token1, msg.sender, market, amountInToken1);
-        IMarket(market).sell(amountOutTokenC, msg.sender);
+        (uint token0, uint token1) = OracleMarkets(oracle).getOutcomeTokenIds(marketIdentifier);
+        OracleMarkets(oracle).safeTransferFrom(msg.sender, oracle, token0, amountInToken0, '');
+        OracleMarkets(oracle).safeTransferFrom(msg.sender, oracle, token1, amountInToken1, '');
+        OracleMarkets(oracle).sell(amountOutTokenC, msg.sender, marketIdentifier);
     }
 
     /// @notice Sell maximum of amountInToken0Max & amountInToken1Max for collateral tokens == amountOutTokenC
     /// fixedTokenIndex - index of token of which amount does not change in reaction to prices
-    function sellMaxTokensForExactCTokens(uint amountInToken0Max, uint amountInToken1Max, uint amountOutTokenC, uint fixedTokenIndex, address market) external {
+    function sellMaxTokensForExactCTokens(uint amountInToken0Max, uint amountInToken1Max, uint amountOutTokenC, uint fixedTokenIndex, address oracle, bytes32 marketIdentifier) external {
         require(fixedTokenIndex < 2);
 
-        (uint reserve0, uint reserve1) = IMarket(market).getOutcomeReserves();
+        (uint reserve0, uint reserve1) = OracleMarkets(oracle).reserves(marketIdentifier);
 
         uint amountInToken0 = amountInToken0Max;
         uint amountInToken1 = amountInToken1Max;
@@ -104,29 +94,29 @@ contract MarketRouter {
         }
         require(amountInToken0 <= amountInToken0Max && amountInToken1 <= amountInToken1Max, "TRADE: INVALID");
 
-        (,address token0, address token1) = IMarket(market).getTokenAddresses();        
-        TransferHelper.safeTransferFrom(token0, msg.sender, market, amountInToken0);
-        TransferHelper.safeTransferFrom(token1, msg.sender, market, amountInToken1);
-        IMarket(market).sell(amountOutTokenC, msg.sender);
+        (uint token0, uint token1) = OracleMarkets(oracle).getOutcomeTokenIds(marketIdentifier); 
+        OracleMarkets(oracle).safeTransferFrom(msg.sender, oracle, token0, amountInToken0, '');
+        OracleMarkets(oracle).safeTransferFrom(msg.sender, oracle, token1, amountInToken1, '');
+        OracleMarkets(oracle).sell(amountOutTokenC, msg.sender, marketIdentifier);
     }
 
     /// @notice Stake amountIn for outcome _for 
-    function stakeForOutcome(uint _for, uint amountIn, address market) external {
+    function stakeForOutcome(uint _for, uint amountIn, address oracle, bytes32 marketIdentifier) external {
         require(_for < 2);
         
-        (uint lastAmountStaked,,,) = IMarket(market).getStaking();
+        (uint lastAmountStaked,,,) = OracleMarkets(oracle).staking(marketIdentifier);
         require(lastAmountStaked*2 <= amountIn, "ERR: DOUBLE");
 
-        (address tokenC,,) = IMarket(market).getTokenAddresses();        
-        TransferHelper.safeTransferFrom(tokenC, msg.sender, market, amountIn);
-        IMarket(market).stakeOutcome(_for, msg.sender);
+        (address tokenC,,) = OracleMarkets(oracle).marketDetails(marketIdentifier);
+        TransferHelper.safeTransferFrom(tokenC, msg.sender, oracle, amountIn);
+        OracleMarkets(oracle).stakeOutcome(_for, msg.sender, marketIdentifier);
     }
 
     /// @notice Redeem winning for outcome
-    function redeemWinning(uint _for, uint amountInToken, address market) external {
-        (,address token0, address token1) = IMarket(market).getTokenAddresses();        
-        if (_for == 0) TransferHelper.safeTransferFrom(token0, msg.sender, market, amountInToken);
-        if (_for == 1) TransferHelper.safeTransferFrom(token1, msg.sender, market, amountInToken);
-        IMarket(market).redeemWinning(_for, msg.sender);
+    function redeemWinning(uint _for, uint amountInToken, address oracle, bytes32 marketIdentifier) external {
+        (uint token0, uint token1) = OracleMarkets(oracle).getOutcomeTokenIds(marketIdentifier);
+        if (_for == 0) OracleMarkets(oracle).safeTransferFrom(msg.sender, oracle, token0, amountInToken, '');
+        if (_for == 1) OracleMarkets(oracle).safeTransferFrom(msg.sender, oracle, token1, amountInToken, '');
+        OracleMarkets(oracle).redeemWinning(msg.sender, marketIdentifier);
     }
 }

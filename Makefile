@@ -22,7 +22,7 @@ clean  :; dapp clean
 lint   :; yarn run lint
 estimate :; ./scripts/estimate-gas.sh ${contract}
 size   :; ./scripts/contract-size.sh ${contract}
-size-main :; ./scripts/contract-size[-main.sh
+size-main :; ./scripts/contract-size-main.sh
 check-inter :; ./scripts/check-inter.sh
  
 # Deployment helpers
