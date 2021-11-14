@@ -5,7 +5,7 @@ pragma solidity ^0.8.0;
  *
  * @dev Implementation of the basic standard multi-token.
  * See https://eips.ethereum.org/EIPS/eip-1155
- * Originally based on code by Enjin: https://github.com/enjin/erc-1155
+ * Based on code by: https://github.com/enjin/erc-1155
  */
 contract ERC1155 
 {
@@ -102,7 +102,7 @@ contract ERC1155
         address to,
         uint256 id,
         uint256 value,
-        bytes calldata data
+        bytes memory data
     )
         public
     {

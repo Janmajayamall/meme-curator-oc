@@ -2,15 +2,11 @@
 
 pragma solidity ^0.8.0;
 
-import './OutcomeToken.sol';
-import './interfaces/IMarketFactory.sol';
 import './interfaces/IMarket.sol';
-import './interfaces/IModerationCommitee.sol';
-import './interfaces/IOutcomeToken.sol';
 import './interfaces/IERC20.sol';
 import './ERC1155.sol';
 
-contract Market is ERC1155, IMarket {
+contract OracleMarkets is ERC1155, IMarket {
     /*
         marketIdentifier = keccack256(abi.encode(creator, eventIdentifier, address(this)))
     */
@@ -72,22 +68,22 @@ contract Market is ERC1155, IMarket {
         return (true, _stateDetails.outcome);
     }
 
-    function getOutcomeTokenIds(bytes32 marketIdentifier) public returns (uint,uint) {
+    function getOutcomeTokenIds(bytes32 marketIdentifier) public pure returns (uint,uint) {
         return (
             uint256(keccak256(abi.encode(marketIdentifier, 0))),
             uint256(keccak256(abi.encode(marketIdentifier, 1)))
         );
     }
     
-    function getReserveTokenIds(bytes32 marketIdentifier) public returns (uint,uint){
+    function getReserveTokenIds(bytes32 marketIdentifier) public pure returns (uint,uint){
         return (
             uint256(keccak256(abi.encode('R', marketIdentifier, 0))),
             uint256(keccak256(abi.encode('R', marketIdentifier, 1)))
         );
     }
 
-    function getMarketIdentifier(address _creator, bytes32 _eventIdentifier) public returns (bytes32){
-        bytes32 marketIdentifier = keccak256(abi.encode(_creator, _eventIdentifier, address(this)));
+    function getMarketIdentifier(address _creator, bytes32 _eventIdentifier) public view returns (bytes32 marketIdentifier){
+        marketIdentifier = keccak256(abi.encode(_creator, _eventIdentifier, address(this)));
     }
 
     function getStateDetails(bytes32 marketIdentifier) external view returns (
@@ -134,11 +130,11 @@ contract Market is ERC1155, IMarket {
 
         uint amount = IERC20(tokenC).balanceOf(address(this)); // fundingAmount > 0
 
-        uint256 token0Id = uint256(keccak256(abi.encode(marketIdentifier, 0)));
-        uint256 token1Id = uint256(keccak256(abi.encode(marketIdentifier, 1)));
+        (uint token0Id, uint token1Id) = getOutcomeTokenIds(marketIdentifier);
 
         // issue outcome tokens
-        _batchMint(address(this), [token0Id, token1Id], [amount], '');
+        _mint(address(this), token0Id, amount, '');
+        _mint(address(this), token1Id, amount, '');
 
         // set reserves
         Reserves memory _reserves;
@@ -185,10 +181,12 @@ contract Market is ERC1155, IMarket {
         uint amount = IERC20(marketDetails[marketIdentifier].tokenC).balanceOf(address(this));
 
         // buy outcome tokens
-        _batchMint(address(this), [token0Id, token1Id], [amount, amount], '');
+        _mint(address(this), token0Id, amount, '');
+        _mint(address(this), token1Id, amount, '');
 
         // transfer outcome tokens
-        safeBatchTransferFrom(address(this), to, [token0Id, token1Id], [amount0, amount1], '');
+        safeTransferFrom(address(this), to, token0Id, amount0, '');
+        safeTransferFrom(address(this), to, token1Id, amount1, '');
 
         uint _reserve0New = (_reserves.reserve0 + amount) - amount0;
         uint _reserve1New = (_reserves.reserve1 + amount) - amount1;
@@ -213,12 +211,14 @@ contract Market is ERC1155, IMarket {
         IERC20(marketDetails[marketIdentifier].tokenC).transfer(to, amount);
 
         // check transferred outcome tokens
-        (uint balance0, uint balance1) = balanceOfBatch([address(this), address(this)], [token0Id, token1Id]);
+        uint balance0 = balanceOf(address(this), token0Id);
+        uint balance1 = balanceOf(address(this), token1Id);
         uint amount0 = balance0 - _reserves.reserve0;
         uint amount1 = balance1 - _reserves.reserve1;
 
         // burn outcome tokens
-        _batchBurn(address(this), [token0Id, token1Id], [amount, amount]);
+        _burn(address(this), token0Id, amount);
+        _burn(address(this), token1Id, amount);
 
         // update reserves 
         uint _reserve0New = (_reserves.reserve0 + amount0) - amount;
@@ -228,7 +228,7 @@ contract Market is ERC1155, IMarket {
         _reserves.reserve0 = _reserve0New;
         _reserves.reserve1 = _reserve1New;
         
-        reserves[marketIdentifier] = reserves;
+        reserves[marketIdentifier] = _reserves;
 
         // emit OutcomeTraded(address(this), to);
     }
@@ -296,12 +296,14 @@ contract Market is ERC1155, IMarket {
         (uint token0Id, uint token1Id) = getOutcomeTokenIds(marketIdentifier);
 
         // get amount
-        (uint balance0, uint balance1) = balanceOfBatch([address(this), address(this)], [token0Id, token1Id]);
+        uint balance0 = balanceOf(address(this), token0Id);
+        uint balance1 = balanceOf(address(this), token1Id);
         uint amount0 = balance0 - _reserves.reserve0;
         uint amount1 = balance1 - _reserves.reserve1;
 
         // burn amount
-        _batchBurn(address(this), [token0Id, token1Id], [amount0, amount1]);
+        _burn(address(this), token0Id, amount0);
+        _burn(address(this), token1Id, amount1);
 
         uint winAmount;
         if (outcome == 2){
@@ -322,7 +324,8 @@ contract Market is ERC1155, IMarket {
         require(valid);
 
         (uint sToken0Id, uint sToken1Id) = getReserveTokenIds(marketIdentifier);
-        (uint sAmount0, uint sAmount1) = balanceOfBatch([msg.sender, msg.sender], [sToken0Id, sToken1Id]);
+        uint sAmount0 = balanceOf(msg.sender, sToken0Id);
+        uint sAmount1 = balanceOf(msg.sender, sToken1Id);
         
         uint winAmount;
         if (outcome == 2){    
@@ -373,7 +376,7 @@ contract Market is ERC1155, IMarket {
         }
         require(_stateDetails.stage == uint8(Stages.MarketResolve) && block.number < _stateDetails.resolutionEndsAtBlock);
 
-        MarketDetails memory _marketDetails = marketDetails;
+        MarketDetails memory _marketDetails = marketDetails[marketIdentifier];
 
         uint fee;
         if (outcome != 2 && _marketDetails.feeNumerator != 0){
@@ -398,15 +401,4 @@ contract Market is ERC1155, IMarket {
 
         emit OutcomeSet(address(this));
     }
-
-    // function claimReserve() external override { 
-    //     (bool valid,) = isMarketClosed();
-    //     require(valid);
-    //     address _creator = creator;
-    //     require(msg.sender == _creator);
-    //     IOutcomeToken(token0).transfer(_creator, reserve0);
-    //     IOutcomeToken(token1).transfer(_creator, reserve1);
-    //     reserve0 = 0;
-    //     reserve1 = 0;
-    // }
 }
