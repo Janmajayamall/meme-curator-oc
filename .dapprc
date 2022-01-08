@@ -5,6 +5,7 @@ export DAPP_LINK_TEST_LIBRARIES=0
 export DAPP_TEST_VERBOSITY=1
 export DAPP_TEST_SMTTIMEOUT=500000
 export DAPP_BUILD_OPTIMIZE_RUNS=1000000
+export DAPP_SOLC_VERSION=0.8.6
 # export DAPP_BUILD_EXTRACT=1
 
 # set so that we can deploy to local node w/o hosted private keys
